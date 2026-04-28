@@ -1,0 +1,523 @@
+rm(list = ls())
+setwd("D:/OneDrive - Aalborg Universitet/Yuanyuan Zeng_AAU/Shrew project/Results/1.30 (Shrinkage)/LASSO/3.25/Liver/")
+library(glmnet)
+library(openxlsx)
+library(pheatmap)
+
+dat <- read.xlsx("Liver_Hub_DEP_allshrinkage.xlsx", colNames =T)
+colnames(dat)
+rownames(dat) <- dat[["GeneSymbol"]]
+dat <- dat[ , !colnames(dat) %in% "GeneSymbol"]
+
+# 4) 检查结果
+dim(dat)
+head(rownames(dat))
+meta <- read.xlsx("Meta_allShrinkage_Normalized.xlsx")
+
+a <- read.xlsx("Liver_Hub_DEP_allShrinkage.xlsx",colNames = T)
+genes <- a$GeneSymbol
+length(genes)
+x = t(dat[rownames(dat) %in% genes,])
+
+responses <- c( "Corticosterone","Arachidonic_acid", "Docosapentaenoic_acid", "Eicosapentaenoic_acid") #Docosapentaenoic_acid or Docosahexanoic_acid
+# ==== 2) 拟合并保存 ====
+set.seed(123)
+fits   <- list()
+cvfits <- list()
+coef_min_no_intercept <- list()
+
+for (resp in responses) {
+  y <- as.numeric(meta[[resp]])
+  cvfit <- cv.glmnet(x, y, alpha = 1, family = "gaussian", nfolds = 4)
+  fit   <- glmnet(x, y, alpha = 1, family = "gaussian")
+  
+  fits[[resp]]   <- fit
+  cvfits[[resp]] <- cvfit
+  
+  # 提取 lambda.min 的系数
+  co <- as.matrix(coef(cvfit, s = "lambda.min"))
+  
+  
+  #co <- as.matrix(coef(fit, s = cvfit$lambda.min))
+  v  <- drop(co[rownames(co) != "(Intercept)", , drop = FALSE])
+  names(v) <- rownames(co)[rownames(co) != "(Intercept)"]
+  coef_min_no_intercept[[resp]] <- v
+}
+
+# ==== 3) CV 曲线三联图 ====
+png("CV_Four_responses_Liver_Shrinkage.png", width = 14, height = 6, units = "in", res = 300)
+#pdf("CV_Four_responses_Liver_Shrinkage.pdf", width = 14, height = 6)
+par(mfrow = c(1, 4), mar = c(5, 5, 5, 2) + 0.1)
+for (resp in responses) {
+  plot(cvfits[[resp]], main = paste("", resp),
+       xlab = expression(-log(lambda)), ylab = "Mean Squared Error")
+}
+par(mfrow = c(1, 1))
+dev.off()
+
+# ==== 4) 系数路径三联图 ====
+png("Paths_Four_responses_Liver_Shrinkage.png", width = 14, height = 6, units = "in", res = 300)
+#pdf("Paths_Four_responses_Liver_Shrinkage.pdf", width = 14, height = 6)
+par(mfrow = c(1, 4), mar = c(5, 5, 5, 2) + 0.1)
+for (resp in responses) {
+  plot(fits[[resp]], xvar = "lambda", label = FALSE,
+       main = paste("", resp), ylab = "Coefficient")
+  abline(h = 0, lty = 2, col = "gray70")
+}
+par(mfrow = c(1, 1))
+dev.off()
+
+# ==== 5) 综合热图 ====
+genes_union <- unique(unlist(lapply(coef_min_no_intercept, names)))
+coef_wide <- matrix(0, nrow = length(genes_union), ncol = length(responses),
+                    dimnames = list(genes_union, responses))
+for (resp in responses) {
+  v <- coef_min_no_intercept[[resp]]
+  if (length(v)) coef_wide[names(v), resp] <- as.numeric(v)
+}
+coef_wide <- coef_wide[rowSums(abs(coef_wide)) > 0, , drop = FALSE]
+#coef_wide <- coef_wide[, colSums(abs(coef_wide)) > 0, drop = FALSE]
+lim <- max(abs(coef_wide), na.rm = TRUE)
+
+png("LASSO_coefficients_heatmap_Liver_Shrinkage.png",width = 8, height = 9, units = "in", res = 300)
+pdf("LASSO_coefficients_heatmap_Liver_Shrinkage.pdf",width = 8, height = 9)
+pheatmap(
+  coef_wide,
+  cluster_cols = FALSE,
+  angle_col = 45,
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+  breaks = seq(-lim, lim, length.out = 101),  
+  border_color = NA,
+  fontsize_row = 13,
+  fontsize_col = 13,
+  main = "LASSO coefficients Atrophic-Liver",
+  fontsize = 15,
+  width = 8, height = 9
+)
+dev.off()
+write.xlsx(
+  data.frame(gene = rownames(coef_wide), coef_wide, row.names = NULL),
+  "LASSO_coefficients_matrix_lambda_min_Liver_Shrinkage.xlsx",
+  rowNames = FALSE
+)
+
+#1️⃣ 交叉验证稳定性（
+set.seed(123)
+
+B <- 100        # 重复次数（可写 100–200）
+nfolds <- 4     # 与你原始分析一致
+
+stability_results <- list()
+
+for (resp in responses) {
+  
+  y <- as.numeric(meta[[resp]])
+  
+  sel_mat <- matrix(0, nrow = B, ncol = ncol(x))
+  colnames(sel_mat) <- colnames(x)
+  
+  for (b in 1:B) {
+    
+    cvfit_b <- cv.glmnet(
+      x, y,
+      alpha = 1,
+      family = "gaussian",
+      nfolds = nfolds
+    )
+    
+    co_b <- as.matrix(coef(cvfit_b, s = "lambda.min"))
+    selected_genes <- rownames(co_b)[co_b[, 1] != 0]
+    selected_genes <- setdiff(selected_genes, "(Intercept)")
+    
+    sel_mat[b, selected_genes] <- 1
+  }
+  
+  freq <- colMeans(sel_mat)
+  
+  stability_results[[resp]] <- sort(freq[freq > 0], decreasing = TRUE)
+}
+
+
+library(dplyr)
+
+stability_long <- bind_rows(
+  lapply(names(stability_results), function(resp) {
+    data.frame(
+      gene = names(stability_results[[resp]]),
+      selection_frequency = as.numeric(stability_results[[resp]]),
+      response = resp,
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+library(tidyr)
+
+stability_wide <- stability_long %>%
+  pivot_wider(
+    names_from = response,
+    values_from = selection_frequency,
+    values_fill = 0
+  )
+
+write.xlsx(
+  list(
+    "long_format" = stability_long,
+    "wide_format" = stability_wide
+  ),
+  "LASSO_selection_frequency_all_responses_Liver.xlsx"
+)
+
+stable_genes <- stability_long %>%
+  filter(selection_frequency >= 0.4)
+
+library(ggplot2)
+stable_genes$response <- factor(
+  stable_genes$response,
+  levels = c(
+    "Corticosterone"    ,
+    "Arachidonic_acid",
+    "Docosapentaenoic_acid",
+    "Eicosapentaenoic_acid"
+  )
+)
+
+
+p <- ggplot(
+  stable_genes,
+  aes(
+    x = reorder(gene, selection_frequency),
+    y = selection_frequency,
+    fill = response
+  )
+) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(~ response, scales = "free_y") +
+  scale_fill_manual(
+    values = c(
+      "Corticosterone"        = "#07964D" ,  # purple
+      "Arachidonic_acid"       = "#BC3C29",  # red
+      "Docosapentaenoic_acid"  = "#0072B5",  # blue
+      "Eicosapentaenoic_acid"  = "#E18727"  # green
+      
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    x = "Gene",
+    y = "Selection frequency",
+    title = "Stability of LASSO-selected genes Atrophic-Liver"
+  )
+
+p
+
+ggsave(
+  "LASSO_selection_frequency_barplot_Liver.pdf",
+  p, width = 9, height = 7
+)
+
+ggsave(
+  "LASSO_selection_frequency_barplot_Liver.png",
+  p, width = 9, height = 7
+)
+#2️⃣ λ_min vs λ_1se 对比（过拟合控制）
+
+lambda_comparison <- list()
+
+for (resp in responses) {
+  
+  y <- as.numeric(meta[[resp]])
+  
+  cvfit <- cv.glmnet(
+    x, y,
+    alpha = 1,
+    family = "gaussian",
+    nfolds = 4
+  )
+  
+  coef_min <- as.matrix(coef(cvfit, s = "lambda.min"))
+  coef_1se <- as.matrix(coef(cvfit, s = "lambda.1se"))
+  
+  genes_min <- setdiff(
+    rownames(coef_min)[coef_min[, 1] != 0],
+    "(Intercept)"
+  )
+  
+  genes_1se <- setdiff(
+    rownames(coef_1se)[coef_1se[, 1] != 0],
+    "(Intercept)"
+  )
+  
+  lambda_comparison[[resp]] <- list(
+    lambda_min = genes_min,
+    lambda_1se = genes_1se,
+    overlap = intersect(genes_min, genes_1se)
+  )
+}
+
+lambda_long <- bind_rows(
+  lapply(names(lambda_comparison), function(resp) {
+    
+    overlap_genes <- lambda_comparison[[resp]]$overlap
+    
+    if (length(overlap_genes) == 0) {
+      return(NULL)
+    }
+    
+    data.frame(
+      gene = overlap_genes,
+      response = resp,
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+lambda_summary <- data.frame(
+  response = names(lambda_comparison),
+  n_lambda_min = sapply(lambda_comparison, function(x) length(x$lambda_min)),
+  n_lambda_1se = sapply(lambda_comparison, function(x) length(x$lambda_1se)),
+  n_overlap    = sapply(lambda_comparison, function(x) length(x$overlap))
+)
+write.xlsx(
+  list(
+    overlap_genes = lambda_long,
+    summary = lambda_summary
+  ),
+  "LASSO_lambda_min_vs_1se_all_responses_Liver.xlsx",
+  rowNames = FALSE
+)
+
+#3️⃣ 真实预测能力（CV 预测 vs 实测）
+set.seed(123)
+
+K <- 4  # 与前文一致
+prediction_summary <- list()
+prediction_detail  <- list()
+
+for (resp in responses) {
+  
+  y <- as.numeric(meta[[resp]])
+  n <- nrow(x)
+  
+  # 若 y 无变异，直接记录 NA
+  if (sd(y) == 0) {
+    prediction_summary[[resp]] <- data.frame(
+      response = resp,
+      n_selected_genes = 0,
+      spearman_r = NA,
+      pearson_r  = NA,
+      R2 = NA
+    )
+    next
+  }
+  
+  # ---- 用全数据做 CV 以选择 lambda.min ----
+  cvfit <- cv.glmnet(
+    x, y,
+    alpha = 1,
+    family = "gaussian",
+    nfolds = K
+  )
+  
+  lambda_star <- cvfit$lambda.min
+  
+  # 记录被选中的基因数（在 lambda.min 下）
+  n_selected <- sum(
+    as.matrix(coef(cvfit, s = "lambda.min"))[-1, 1] != 0
+  )
+  
+  # ---- 构造 OOF 预测 ----
+  foldid <- sample(rep(1:K, length.out = n))
+  pred_cv <- rep(NA_real_, n)
+  
+  for (k in 1:K) {
+    train_idx <- which(foldid != k)
+    test_idx  <- which(foldid == k)
+    
+    fit_k <- glmnet(
+      x[train_idx, , drop = FALSE],
+      y[train_idx],
+      alpha = 1,
+      family = "gaussian"
+    )
+    
+    pred_cv[test_idx] <- as.numeric(
+      predict(
+        fit_k,
+        newx = x[test_idx, , drop = FALSE],
+        s = lambda_star
+      )
+    )
+  }
+  
+  # ---- 性能评估（仅在合法时计算） ----
+  if (sd(pred_cv, na.rm = TRUE) > 0) {
+    spearman_r <- cor(pred_cv, y, method = "spearman", use = "complete.obs")
+    pearson_r  <- cor(pred_cv, y, method = "pearson",  use = "complete.obs")
+    R2 <- pearson_r^2
+  } else {
+    spearman_r <- NA
+    pearson_r  <- NA
+    R2 <- NA
+  }
+  
+  # ---- 保存汇总 ----
+  prediction_summary[[resp]] <- data.frame(
+    response = resp,
+    n_selected_genes = n_selected,
+    spearman_r = spearman_r,
+    pearson_r  = pearson_r,
+    R2 = R2
+  )
+  
+  # ---- 保存逐样本预测（用于作图）----
+  prediction_detail[[resp]] <- data.frame(
+    response  = resp,
+    observed  = y,
+    predicted = pred_cv
+  )
+}
+
+prediction_summary_df <- bind_rows(prediction_summary)
+prediction_detail_df  <- bind_rows(prediction_detail)
+
+write.xlsx(
+  list(
+    summary = prediction_summary_df,
+    detail  = prediction_detail_df
+  ),
+  "LASSO_OOF_prediction_performance.xlsx",
+  rowNames = FALSE
+)
+
+
+
+#整合所有可信基因
+
+integrated_all <- bind_rows(
+  lapply(responses, function(resp) {
+    
+    # ---------- λ_min 下非零基因及系数 ----------
+    coef_vec <- coef_min_no_intercept[[resp]]
+    coef_vec <- coef_vec[coef_vec != 0]
+    
+    if (length(coef_vec) == 0) {
+      return(NULL)
+    }
+    
+    genes_lambda_min <- names(coef_vec)
+    
+    # ---------- 稳定性 ----------
+    stability_resp <- stability_long %>%
+      filter(response == resp) %>%
+      select(gene, selection_frequency)
+    
+    # ---------- λ_1se ----------
+    genes_lambda_1se <- lambda_comparison[[resp]]$overlap
+    
+    # ---------- 整合 ----------
+    data.frame(
+      response = resp,
+      gene = genes_lambda_min,
+      coef_lambda_min = as.numeric(coef_vec),
+      stringsAsFactors = FALSE
+    ) %>%
+      left_join(
+        stability_resp,
+        by = "gene"
+      ) %>%
+      mutate(
+        selection_frequency = ifelse(
+          is.na(selection_frequency), 0, selection_frequency
+        ),
+        in_lambda_1se = gene %in% genes_lambda_1se
+      )
+  })
+)
+
+integrated_all
+write.xlsx(
+  list(
+    integrated_all = integrated_all
+  ),
+  "LASSO_integrated_evidence_all_metabolites_Liver.xlsx",
+  rowNames = FALSE
+)
+
+
+integrated_all <- integrated_all %>%
+  mutate(
+    tier = case_when(
+      selection_frequency >= 0.5 & in_lambda_1se ~ "Tier-1 core",
+      selection_frequency >= 0.4 & !in_lambda_1se ~ "Tier-2 supportive",
+      TRUE ~ "Tier-3 unstable"
+    )
+  )
+
+library(ggplot2)
+
+integrated_all$response <- factor(
+  integrated_all$response,
+  levels = c(
+    "Corticosterone"    ,
+    "Arachidonic_acid",
+    "Docosapentaenoic_acid",
+    "Eicosapentaenoic_acid"
+  )
+)
+
+p_lollipop <- ggplot(
+  integrated_all,
+  aes(
+    x = selection_frequency,
+    y = gene,
+    color = tier
+  )
+) +
+  geom_segment(
+    aes(
+      x = 0,
+      xend = selection_frequency,
+      y = gene,
+      yend = gene
+    ),
+    linewidth = 2
+  ) +
+  geom_point(size = 4) +
+  facet_wrap(~ response, scales = "free_y") +
+  scale_color_manual(
+    values = c(
+      "Tier-1 core" = "#D73027",
+      "Tier-2 supportive" = "#FC8D59",
+      "Tier-3 unstable" = "grey70"
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )+
+  labs(
+    x = "Selection frequency",
+    y = "Proteins",
+    title = "Integrated evidence of LASSO-selected proteins Atrophic-Liver",
+    color = "Evidence tier"
+  )
+
+p_lollipop
+ggsave(
+  "LASSO_integrated_lollipop_plot_Liver_Shrinkage.pdf",
+  p_lollipop, width = 11, height = 7
+)
+ggsave(
+  "LASSO_integrated_lollipop_plot_Liver_Shrinkage.png",
+  p_lollipop, width = 11, height = 7
+)
+
+

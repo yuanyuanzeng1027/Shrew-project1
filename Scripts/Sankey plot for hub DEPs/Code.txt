@@ -1,0 +1,112 @@
+
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(ggalluvial)
+
+df_raw <- read_tsv(
+  "Top 10 degree DEPs for all - 副本.txt",
+  col_names = c("layer1", "layer2", "layer3"),
+  skip = 1,              
+  show_col_types = FALSE
+) %>% 
+  filter(!is.na(layer1), !is.na(layer2), !is.na(layer3))
+
+gene_order <- unique(df_raw$layer2)
+
+df_alluvial <- df_raw %>%
+  mutate(
+    layer1 = factor(layer1, levels = c("Atrophic_Brain", "Atrophic_Liver", "Regrown_Brain", "Regrown_Liver")),
+    layer2 = factor(layer2, levels = gene_order), 
+    layer3 = factor(layer3, levels = c("Up", "Down")),
+    alluvium = row_number() 
+  ) %>%
+
+  to_lodes_form(axes = c("layer1", "layer2", "layer3"), id = "alluvium")
+
+
+df_alluvial <- df_alluvial %>%
+  group_by(alluvium) %>%
+  mutate(
+
+    group_val = stratum[x == "layer1"],
+    dir_val   = stratum[x == "layer3"],
+
+    flow_fill = if_else(x == "layer1", as.character(group_val), as.character(dir_val))
+  ) %>%
+  ungroup()
+
+my_cols <- c(
+
+  "Atrophic_Brain" = "#8C9FAE",  
+  "Atrophic_Liver" = "#9DAA8F",  
+  "Regrown_Brain"  = "#C7A9A1",  
+  "Regrown_Liver"  = "#D8C3A5",  
+  
+
+  "Up"   = "#C06C6C",  
+  "Down" = "#6C8EBF"   
+)
+
+
+p <- ggplot(
+  df_alluvial,
+  aes(
+    x        = x, 
+    stratum  = stratum, 
+    alluvium = alluvium, 
+    y        = 1
+  )
+) +
+  geom_flow(
+    aes(fill = flow_fill),
+    width = 0.2,
+    alpha = 0.5,
+    linewidth = 0.1
+  ) +
+  
+
+  geom_stratum(
+    aes(fill = case_when(
+      x == "layer1" ~ as.character(stratum), 
+      TRUE          ~ as.character(dir_val)  
+    )),
+    width = 0.2,
+    color = "grey70",
+    linewidth = 0.1
+  ) +
+  
+
+  geom_text(
+    stat = "stratum",
+    aes(label = after_stat(stratum)),
+    size = 3
+  ) +
+  
+
+  scale_fill_manual(values = my_cols) +
+  scale_x_discrete(
+    limits = c("layer1", "layer2", "layer3"),
+    labels = c("Group", "DEPs", "Direction"),
+    position = "top",
+    expand = c(0.1, 0.1)
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position = "none",
+    axis.title = element_blank(),
+    axis.text.y = element_blank(),
+    panel.grid = element_blank(),
+    plot.margin = margin(10, 10, 10, 10)
+  )
+
+
+p
+
+
+
+# 7. 保存
+ggsave("Sankey_Final_Fixed.pdf", p, device = cairo_pdf, width = 12, height = 10)
+
+ggsave("Sankey_Final_Fixed.png", p, device = cairo_pdf, width = 12, height = 10)
+

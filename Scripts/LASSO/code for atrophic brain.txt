@@ -1,0 +1,450 @@
+library(glmnet)
+library(openxlsx)
+library(pheatmap)
+
+dat <- read.xlsx("Brain_Hub_DEP_allShrinkage.xlsx", colNames =T)
+colnames(dat)
+rownames(dat) <- dat[["GeneSymbol"]]
+dat <- dat[ , !colnames(dat) %in% "GeneSymbol"]
+
+
+head(rownames(dat))
+meta <- read.xlsx("Meta_allShrinkage_Normalized.xlsx")
+
+a <- read.xlsx("Brain_Hub_DEP_allShrinkage.xlsx",colNames = T)
+genes <- a$GeneSymbol
+length(genes)
+x = t(dat[rownames(dat) %in% genes,])
+
+responses <- c( "Corticosterone","Arachidonic_acid", "Docosapentaenoic_acid", "Eicosapentaenoic_acid") #Docosapentaenoic_acid or Docosahexanoic_acid
+
+set.seed(123)
+fits   <- list()
+cvfits <- list()
+coef_min_no_intercept <- list()
+
+for (resp in responses) {
+  y <- as.numeric(meta[[resp]])
+  cvfit <- cv.glmnet(x, y, alpha = 1, family = "gaussian", nfolds = 4)
+  fit   <- glmnet(x, y, alpha = 1, family = "gaussian")
+  
+  fits[[resp]]   <- fit
+  cvfits[[resp]] <- cvfit
+  
+
+  co <- as.matrix(coef(cvfit, s = "lambda.min"))
+  
+  
+
+  v  <- drop(co[rownames(co) != "(Intercept)", , drop = FALSE])
+  names(v) <- rownames(co)[rownames(co) != "(Intercept)"]
+  coef_min_no_intercept[[resp]] <- v
+}
+
+par(mfrow = c(1, 4), mar = c(5, 5, 5, 2) + 0.1)
+for (resp in responses) {
+  plot(cvfits[[resp]], main = paste("", resp),
+       xlab = expression(-log(lambda)), ylab = "Mean Squared Error")
+}
+par(mfrow = c(1, 1))
+
+
+par(mfrow = c(1, 4), mar = c(5, 5, 5, 2) + 0.1)
+for (resp in responses) {
+  plot(fits[[resp]], xvar = "lambda", label = FALSE,
+       main = paste("", resp), ylab = "Coefficient")
+  abline(h = 0, lty = 2, col = "gray70")
+}
+par(mfrow = c(1, 1))
+dev.off()
+
+genes_union <- unique(unlist(lapply(coef_min_no_intercept, names)))
+coef_wide <- matrix(0, nrow = length(genes_union), ncol = length(responses),
+                    dimnames = list(genes_union, responses))
+for (resp in responses) {
+  v <- coef_min_no_intercept[[resp]]
+  if (length(v)) coef_wide[names(v), resp] <- as.numeric(v)
+}
+coef_wide <- coef_wide[rowSums(abs(coef_wide)) > 0, , drop = FALSE]
+#coef_wide <- coef_wide[, colSums(abs(coef_wide)) > 0, drop = FALSE]
+lim <- max(abs(coef_wide), na.rm = TRUE)
+
+pheatmap(
+  coef_wide,
+  cluster_cols = FALSE,
+  angle_col = 45,
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  clustering_method = "complete",
+  color = colorRampPalette(c("#2166AC", "white", "#B2182B"))(100),
+  breaks = seq(-lim, lim, length.out = 101),  
+  border_color = NA,
+  fontsize_row = 13,
+  fontsize_col = 13,
+  main = "LASSO coefficients Atrophic-Brain",
+  fontsize = 15,
+  width = 8, height = 9
+)
+dev.off()
+set.seed(123)
+
+B <- 100        
+nfolds <- 4     
+
+stability_results <- list()
+
+for (resp in responses) {
+  
+  y <- as.numeric(meta[[resp]])
+  
+  sel_mat <- matrix(0, nrow = B, ncol = ncol(x))
+  colnames(sel_mat) <- colnames(x)
+  
+  for (b in 1:B) {
+    
+    cvfit_b <- cv.glmnet(
+      x, y,
+      alpha = 1,
+      family = "gaussian",
+      nfolds = nfolds
+    )
+    
+    co_b <- as.matrix(coef(cvfit_b, s = "lambda.min"))
+    selected_genes <- rownames(co_b)[co_b[, 1] != 0]
+    selected_genes <- setdiff(selected_genes, "(Intercept)")
+    
+    sel_mat[b, selected_genes] <- 1
+  }
+  
+  freq <- colMeans(sel_mat)
+  
+  stability_results[[resp]] <- sort(freq[freq > 0], decreasing = TRUE)
+}
+
+
+library(dplyr)
+
+stability_long <- bind_rows(
+  lapply(names(stability_results), function(resp) {
+    data.frame(
+      gene = names(stability_results[[resp]]),
+      selection_frequency = as.numeric(stability_results[[resp]]),
+      response = resp,
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+library(tidyr)
+
+stability_wide <- stability_long %>%
+  pivot_wider(
+    names_from = response,
+    values_from = selection_frequency,
+    values_fill = 0
+  )
+
+
+
+stable_genes <- stability_long %>%
+  filter(selection_frequency >= 0.4)
+
+library(ggplot2)
+stable_genes$response <- factor(
+  stable_genes$response,
+  levels = c(
+    "Corticosterone"    ,
+    "Arachidonic_acid",
+    "Docosapentaenoic_acid",
+    "Eicosapentaenoic_acid"
+  )
+)
+
+
+p <- ggplot(
+  stable_genes,
+  aes(
+    x = reorder(gene, selection_frequency),
+    y = selection_frequency,
+    fill = response
+  )
+) +
+  geom_col(show.legend = FALSE) +
+  coord_flip() +
+  facet_wrap(~ response, scales = "free_y") +
+  scale_fill_manual(
+    values = c(
+      "Corticosterone"        = "#07964D" , 
+      "Arachidonic_acid"       = "#BC3C29", 
+      "Docosapentaenoic_acid"  = "#0072B5",  
+      "Eicosapentaenoic_acid"  = "#E18727"  
+      
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  ) +
+  labs(
+    x = "Gene",
+    y = "Selection frequency",
+    title = "Stability of LASSO-selected genes Atrophic-Brain"
+  )
+
+p
+
+
+
+lambda_comparison <- list()
+
+for (resp in responses) {
+  
+  y <- as.numeric(meta[[resp]])
+  
+  cvfit <- cv.glmnet(
+    x, y,
+    alpha = 1,
+    family = "gaussian",
+    nfolds = 4
+  )
+  
+  coef_min <- as.matrix(coef(cvfit, s = "lambda.min"))
+  coef_1se <- as.matrix(coef(cvfit, s = "lambda.1se"))
+  
+  genes_min <- setdiff(
+    rownames(coef_min)[coef_min[, 1] != 0],
+    "(Intercept)"
+  )
+  
+  genes_1se <- setdiff(
+    rownames(coef_1se)[coef_1se[, 1] != 0],
+    "(Intercept)"
+  )
+  
+  lambda_comparison[[resp]] <- list(
+    lambda_min = genes_min,
+    lambda_1se = genes_1se,
+    overlap = intersect(genes_min, genes_1se)
+  )
+}
+
+lambda_long <- bind_rows(
+  lapply(names(lambda_comparison), function(resp) {
+    
+    overlap_genes <- lambda_comparison[[resp]]$overlap
+    
+    if (length(overlap_genes) == 0) {
+      return(NULL)
+    }
+    
+    data.frame(
+      gene = overlap_genes,
+      response = resp,
+      stringsAsFactors = FALSE
+    )
+  })
+)
+
+lambda_summary <- data.frame(
+  response = names(lambda_comparison),
+  n_lambda_min = sapply(lambda_comparison, function(x) length(x$lambda_min)),
+  n_lambda_1se = sapply(lambda_comparison, function(x) length(x$lambda_1se)),
+  n_overlap    = sapply(lambda_comparison, function(x) length(x$overlap))
+)
+
+set.seed(123)
+
+K <- 4  # 与前文一致
+prediction_summary <- list()
+prediction_detail  <- list()
+
+for (resp in responses) {
+  
+  y <- as.numeric(meta[[resp]])
+  n <- nrow(x)
+
+  if (sd(y) == 0) {
+    prediction_summary[[resp]] <- data.frame(
+      response = resp,
+      n_selected_genes = 0,
+      spearman_r = NA,
+      pearson_r  = NA,
+      R2 = NA
+    )
+    next
+  }
+  
+   cvfit <- cv.glmnet(
+    x, y,
+    alpha = 1,
+    family = "gaussian",
+    nfolds = K
+  )
+  
+  lambda_star <- cvfit$lambda.min
+  
+
+  n_selected <- sum(
+    as.matrix(coef(cvfit, s = "lambda.min"))[-1, 1] != 0
+  )
+  
+
+  foldid <- sample(rep(1:K, length.out = n))
+  pred_cv <- rep(NA_real_, n)
+  
+  for (k in 1:K) {
+    train_idx <- which(foldid != k)
+    test_idx  <- which(foldid == k)
+    
+    fit_k <- glmnet(
+      x[train_idx, , drop = FALSE],
+      y[train_idx],
+      alpha = 1,
+      family = "gaussian"
+    )
+    
+    pred_cv[test_idx] <- as.numeric(
+      predict(
+        fit_k,
+        newx = x[test_idx, , drop = FALSE],
+        s = lambda_star
+      )
+    )
+  }
+  
+
+  if (sd(pred_cv, na.rm = TRUE) > 0) {
+    spearman_r <- cor(pred_cv, y, method = "spearman", use = "complete.obs")
+    pearson_r  <- cor(pred_cv, y, method = "pearson",  use = "complete.obs")
+    R2 <- pearson_r^2
+  } else {
+    spearman_r <- NA
+    pearson_r  <- NA
+    R2 <- NA
+  }
+  
+
+  prediction_summary[[resp]] <- data.frame(
+    response = resp,
+    n_selected_genes = n_selected,
+    spearman_r = spearman_r,
+    pearson_r  = pearson_r,
+    R2 = R2
+  )
+  
+
+  prediction_detail[[resp]] <- data.frame(
+    response  = resp,
+    observed  = y,
+    predicted = pred_cv
+  )
+}
+
+prediction_summary_df <- bind_rows(prediction_summary)
+prediction_detail_df  <- bind_rows(prediction_detail)
+
+
+
+integrated_all <- bind_rows(
+  lapply(responses, function(resp) {
+    
+    coef_vec <- coef_min_no_intercept[[resp]]
+    coef_vec <- coef_vec[coef_vec != 0]
+    
+    if (length(coef_vec) == 0) {
+      return(NULL)
+    }
+    
+    genes_lambda_min <- names(coef_vec)
+    
+
+    stability_resp <- stability_long %>%
+      filter(response == resp) %>%
+      select(gene, selection_frequency)
+    
+
+    genes_lambda_1se <- lambda_comparison[[resp]]$overlap
+    
+
+    data.frame(
+      response = resp,
+      gene = genes_lambda_min,
+      coef_lambda_min = as.numeric(coef_vec),
+      stringsAsFactors = FALSE
+    ) %>%
+      left_join(
+        stability_resp,
+        by = "gene"
+      ) %>%
+      mutate(
+        selection_frequency = ifelse(
+          is.na(selection_frequency), 0, selection_frequency
+        ),
+        in_lambda_1se = gene %in% genes_lambda_1se
+      )
+  })
+)
+
+
+
+integrated_all <- integrated_all %>%
+  mutate(
+    tier = case_when(
+      selection_frequency >= 0.5 & in_lambda_1se ~ "Tier-1 core",
+      selection_frequency >= 0.4 & !in_lambda_1se ~ "Tier-2 supportive",
+      TRUE ~ "Tier-3 unstable"
+    )
+  )
+
+library(ggplot2)
+
+integrated_all$response <- factor(
+  integrated_all$response,
+  levels = c(
+    "Corticosterone"    ,
+    "Arachidonic_acid",
+    "Docosapentaenoic_acid",
+    "Eicosapentaenoic_acid"
+  )
+)
+
+p_lollipop <- ggplot(
+  integrated_all,
+  aes(
+    x = selection_frequency,
+    y = gene,
+    color = tier
+  )
+) +
+  geom_segment(
+    aes(
+      x = 0,
+      xend = selection_frequency,
+      y = gene,
+      yend = gene
+    ),
+    linewidth = 2
+  ) +
+  geom_point(size = 4) +
+  facet_wrap(~ response, scales = "free_y") +
+  scale_color_manual(
+    values = c(
+      "Tier-1 core" = "#D73027",
+      "Tier-2 supportive" = "#FC8D59",
+      "Tier-3 unstable" = "grey70"
+    )
+  ) +
+  theme_classic(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5)
+  )+
+  labs(
+    x = "Selection frequency",
+    y = "Proteins",
+    title = "Integrated evidence of LASSO-selected proteins Atrophic-Brain",
+    color = "Evidence tier"
+  )
+
+p_lollipop
+
+

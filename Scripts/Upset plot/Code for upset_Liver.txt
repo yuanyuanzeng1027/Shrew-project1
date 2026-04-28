@@ -1,0 +1,71 @@
+
+
+library(UpSetR)
+library(ggplot2)
+library(readxl)
+library(tibble)
+
+
+data_mat <- read_excel("upset data liver.xlsx")
+data_mat <- column_to_rownames(data_mat, var = colnames(data_mat)[1])
+set_names <- colnames(data_mat)
+
+my_colors <- c(
+  "#377EB8", 
+  "#E41A1C",
+  "#436329",
+  "#E18727"
+
+)
+
+names(my_colors) <- set_names
+
+meta_info <- data.frame(  
+  sets = set_names,  
+  Group = set_names    
+)
+
+set_meta <- list(  
+  data = meta_info,  
+  plots = list(     
+    list(      
+      type = "matrix_rows",      
+      column = "Group",            
+      colors = my_colors,         
+      alpha = 0.2             
+    )
+  )
+)
+
+
+while (!is.null(dev.list())) dev.off()
+
+pdf("upset_plot_Brain.pdf", width = 10, height = 6, family = "serif", onefile = FALSE)
+
+UpSetR::upset(  
+  data_mat, 
+  nintersects = 25,             
+  sets = set_names,             
+  keep.order = TRUE,            
+  set.metadata = set_meta,      
+  sets.bar.color = my_colors,   
+  main.bar.color = "black",    
+  queries = list(
+    list(query = intersects, params = list(set_names[1]), color = "grey70", active = T),                 
+    list(query = intersects, params = list(set_names[2]), color = "grey70", active = T),                 
+    list(query = intersects, params = list(set_names[3]), color = "grey70", active = T),                 
+    list(query = intersects, params = list(set_names[4]), color = "grey70", active = T)
+  ),  
+  matrix.dot.alpha = 0.5,       
+  point.size = 3,               
+  line.size = 0.8,              
+  mb.ratio = c(0.6, 0.4),       
+  mainbar.y.label = "Intersection size",
+  sets.x.label = "Set size", 
+  show.numbers = "yes",
+  text.scale = c(2.5, 2.0, 2.5, 2.0, 2.0, 2.0),   order.by = "freq"
+  
+)
+
+dev.off()
+

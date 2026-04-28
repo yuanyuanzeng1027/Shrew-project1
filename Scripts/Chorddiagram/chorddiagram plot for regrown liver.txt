@@ -1,0 +1,207 @@
+library(circlize)
+library(clusterProfiler) 
+library(org.Mm.eg.db) 
+library(dplyr) 
+library(stringr) 
+library(openxlsx) 
+
+deg <- read.csv("DEP_Liver_SumAd_WinJuv.csv", header = TRUE, sep = ",") 
+
+deg <- bitr(deg$GeneSymbol, fromType = "SYMBOL", 
+            toType = "ENTREZID", 
+            OrgDb = org.Mm.eg.db) %>% 
+  left_join(deg, by = c("SYMBOL" = "GeneSymbol"))
+
+# Create gene list for enrichment (assuming LogFC column exists) 
+gene_list <- deg$LogFC 
+names(gene_list) <- deg$ENTREZID
+# Filter out genes without valid fold changes 
+gene_list <- gene_list[!is.na(gene_list)] 
+# --- 2. KEGG enrichment --- 
+ekegg <- enrichKEGG(
+  gene = names(gene_list),
+  organism = "mmu",         
+  pAdjustMethod = "BH",
+  pvalueCutoff = 0.05,
+  qvalueCutoff = 0.05
+)
+
+if (nrow(ekegg@result) == 0) {
+  stop("❌ No enriched KEGG terms found. Try relaxing the cutoffs or check gene IDs.")
+} 
+
+ekegg <- setReadable(ekegg, OrgDb = org.Mm.eg.db, keyType = "ENTREZID")
+ekegg_filtered <- ekegg@result %>%
+  filter(p.adjust <= 0.05, qvalue <= 0.05)
+write.xlsx(ekegg_filtered, file = "KEGG_Liver_Enrichment_Regrowth.xlsx", overwrite = TRUE)
+
+all_kegg <- read.xlsx("KEGG_Liver_Enrichment_Regeneration.xlsx")
+colnames(deg)[colnames(deg) == "SYMBOL"] <- "GeneSymbol"
+
+
+rows_to_use <- c(11,2,3,25, 19, 20)
+rows_to_use <- rows_to_use[rows_to_use <= nrow(all_kegg)]
+
+top_kegg_terms <- all_kegg[rows_to_use, ]
+
+wrap_text <- function(x, width = 28) paste(strwrap(x, width = width), collapse = "\n")
+
+ 
+links_list <- list() 
+
+for (i in 1:nrow(top_kegg_terms)) {
+  kegg_id <- top_kegg_terms$ID[i]
+  kegg_description <- top_kegg_terms$Description[i]
+  
+  
+
+  
+  
+  kegg_description <- gsub("regulation of ", "reg. of ", kegg_description)
+  kegg_description <- gsub("positive regulation of ", "+reg. of ", kegg_description)
+  kegg_description <- gsub("negative regulation of ", "-reg. of ", kegg_description)
+  kegg_description <- gsub("response to ", "resp. to ", kegg_description)
+  kegg_description <- gsub("cellular ", "", kegg_description)
+  kegg_description <- gsub("biological ", "", kegg_description)
+  kegg_description <- gsub("metabolic process", "metabolism", kegg_description)
+  
+  kegg_label <- wrap_text(kegg_description, width = 28)
+  
+  
+  genes_in_term <- unlist(strsplit(top_kegg_terms$geneID[i], "/")) 
+  
+  # Create temporary dataframe for this KEGG term 
+  temp_links <- data.frame( 
+    KEGG = rep(kegg_label, length(genes_in_term)), 
+    Gene = genes_in_term, 
+    KEGG_ID = rep(kegg_id, length(genes_in_term)), 
+    stringsAsFactors = FALSE 
+    
+  ) 
+  links_list[[i]] <- temp_links 
+} 
+
+
+links <- do.call(rbind, links_list) 
+
+links <- links %>% left_join(deg, by = c("Gene" = "GeneSymbol")) 
+
+links <- links[!is.na(links$LogFC), ] 
+
+if (nrow(links) == 0) { 
+  stop("No genes could be matched. Check if GeneSymbol column contains gene symbols.") 
+} 
+
+# Define color palette for KEGG terms (more varied and appealing) 
+kegg_colors <- c("#E31A1C", "#FF7F00", "#1F78B4",
+                 "#B15928",  "#B2DF8A", "#FB9A99", "#FDBF6F") 
+kegg_terms <- unique(links$KEGG) 
+kegg_color_map <- setNames(kegg_colors[1:length(kegg_terms)], kegg_terms) 
+
+
+max_fc <- max(abs(links$LogFC), na.rm = TRUE) 
+gene_colors <- sapply(links$LogFC, function(fc) { 
+  if (fc > 0) { 
+    # Upregulated: gradient from light red to dark red 
+    intensity <- min(abs(fc) / max_fc, 1) 
+    rgb(1, 1 - intensity * 0.7, 1 - intensity * 0.7) 
+  } else { 
+    # Downregulated: gradient from light blue to dark blue 
+    intensity <- min(abs(fc) / max_fc, 1) 
+    rgb(1 - intensity * 0.7, 1 - intensity * 0.7, 1) 
+  } 
+}) 
+names(gene_colors) <- links$Gene 
+
+
+all_colors <- c(kegg_color_map, gene_colors) 
+
+
+png("ChordPlot_DEP_KEGG_Liver_Regrowth.png", width = 7000, height = 7000, res = 300) # Increased size 
+pdf("ChordPlot_DEP_KEGG_Liver_Regrowth.pdf", width = 21, height = 21)
+
+par(mar = c(0, 1, 1, 2)) # Increased margins for labels 
+
+circos.par(start.degree = 90, gap.degree = 2, # Increased gap between sectors 
+           track.margin = c(0.02, 0.02), # More margin 
+           cell.padding = c(0.02, 0, 0.02, 0)) 
+
+chordDiagram(links[, c("KEGG", "Gene")], 
+             grid.col = all_colors, transparency = 0.3, 
+             directional = 1, direction.type = c("diffHeight", "arrows"), 
+             link.arr.type = "big.arrow", 
+             annotationTrack = "grid", 
+             preAllocateTracks = list( 
+               track.height = 0.28, # Increased track height significantly 
+               track.margin = c(0.02, 0.02) # More track margin
+             )) 
+
+
+circos.track(track.index = 1, panel.fun = function(x, y) { 
+  xlim = get.cell.meta.data("xlim") 
+  ylim = get.cell.meta.data("ylim") 
+  sector.name = get.cell.meta.data("sector.index") 
+  
+  if (sector.name %in% kegg_terms) { 
+ 
+    circos.text(mean(xlim), ylim[1] + 0.01, sector.name, # Increased y position 
+                facing = "clockwise", niceFacing = TRUE, 
+                adj = c(0, 0.5), cex = 2.5, font = 2, col = "black") 
+  } else { 
+  
+    circos.text(mean(xlim), ylim[1] + 0.1, sector.name, 
+                facing = "clockwise", niceFacing = TRUE, 
+                adj = c(0, 0.5), cex = 2.0, col = "gray30")
+  } 
+}, bg.border = NA)
+
+library(ComplexHeatmap)
+library(grid)
+
+
+legend_fc <- Legend(
+  title = expression(log[2]*"(fold change)"),
+  col_fun = colorRamp2(
+    c(-max_fc, 0, max_fc),
+    c("#0070BB", "white", "#F33010")  # (low = "#546de5", high = "#ff4757")
+  ),
+  at = c(-max_fc, 0, max_fc),
+  labels = c(paste0("-", round(max_fc, 1)), "0", paste0("+", round(max_fc, 1))),
+  direction = "horizontal",      
+  legend_width = unit(5, "cm"),  
+  title_gp = gpar(fontsize = 22, fontface = "bold"),
+  labels_gp = gpar(fontsize = 18),
+  border = "black",
+  grid_height = unit(0.4, "cm")
+)
+
+
+draw(
+  legend_fc,
+  x = unit(0.5, "npc"),    
+  y = unit(0.05, "npc"),   
+  just = c("center", "bottom")
+)
+
+
+grid.text(
+  paste0(
+    "KEGG Terms: ", length(kegg_terms),
+    " | Proteins: ", length(unique(links$Gene)),
+    " | Connections: ", nrow(links)
+  ),
+  x = unit(0.5, "npc"), 
+  y = unit(0.03, "npc"),     
+  gp = gpar(fontsize = 24, col = "gray40")
+)
+
+
+circos.clear() 
+dev.off() 
+
+
+cat("KEGG terms used in plot:\n") 
+for(i in 1:length(kegg_terms)) { 
+  cat(paste0(i, ". ", kegg_terms[i], "\n")) 
+}
+

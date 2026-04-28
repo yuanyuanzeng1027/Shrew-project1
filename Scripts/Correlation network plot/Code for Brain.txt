@@ -1,0 +1,95 @@
+library(linkET)
+library(vegan)
+library(Hmisc) 
+library(ggplot2)
+library(corrplot)
+
+Protein_data <- read.csv('Brain_Regrowth_HubDEP.csv', row.names =1)
+pro_raw <- Protein_data[,1:10]
+pro <- as.data.frame(lapply(pro_raw, function(x) {
+  as.numeric(gsub('[^0-9\\.-eE]', '', x))
+}))
+pro_mat <- as.matrix(pro)
+ qcorrplot(
+  rcorr(pro_mat),   
+  type ="upper",  
+  diag =FALSE      
+)+ geom_mark()
+
+qcorrplot(
+  rcorr(pro_mat),
+  type ="upper",
+  diag =FALSE,
+  grid_size =0.4,              
+  grid_col ="lightgray"       
+)+
+  geom_square(linetype =0)+   
+  set_corrplot_style(colours =c("#377EB8", "white", "#E41A1C"))+
+  geom_mark()   
+
+mantel <- read.csv('Brain_OmicStudio_Cor_link.Cor_link_Output.csv')
+
+p2 <-qcorrplot(
+  rcorr(pro_mat),
+  type = "upper",
+  diag = FALSE,
+  grid_size = 0.4,
+  grid_col = "lightgray"
+) +
+  geom_square(linetype = 0) +
+  geom_couple(
+    aes(
+      colour = r_sign,          
+      size = abs_r,             
+      linetype = ifelse(p > 0.05, "dotted", "solid") ,
+      alpha = 0.8 
+    ),
+    data = mantel,              
+    curvature = 0.1
+  ) +
+  set_corrplot_style(colours = c("#377EB8", "white", "#E41A1C")) +
+  
+
+  scale_size_manual(
+    breaks = c("<0.1", "0.1-0.3", ">0.3"),
+    values = c(0.1, 0.3, 0.8)
+  ) +
+  
+
+  scale_colour_manual(
+    breaks = c("Positive", "Negative"),
+    values = c("#E41A1C", "#377EB8") 
+  ) +
+  
+
+  scale_linetype_manual(
+    breaks = c("dotted", "solid"),
+    values = c("dotted", "solid"),
+    labels = c("p >= 0.05", "p < 0.05")
+  ) +
+
+  guides(
+    size = guide_legend(title = "Pearson's abs_r", override.aes = list(colour = "grey35"), order = 2),
+    colour = guide_legend(title = "r.sign", override.aes = list(size = 2), order = 1),
+    linetype = guide_legend(title = "Pearson's p", override.aes = list(colour = "grey35"), size = 1, order = 3),
+    fill = guide_colorbar(title = "Pearson's r", order = 4),
+    alpha = "none"
+  ) +
+  
+
+  geom_mark(
+    only_mark = TRUE,
+    size = 4,
+    sig_level = c(0.05, 0.01, 0.001),
+    sig_thres = 0.05
+  )+
+  theme(
+    axis.text.x.top = element_text(
+      angle = 45,         
+      hjust = 0,          
+      vjust = 0            
+    )
+  )
+
+p2
+

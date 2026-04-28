@@ -1,0 +1,81 @@
+rm(list=ls())
+setwd("D:/OneDrive - Aalborg Universitet/Yuanyuan Zeng_AAU/Shrew project/Results/1.30 (Shrinkage)/DE/DEM/")
+# install.packages("devtools")
+# 安装 ggrepel 包（如果尚未安装）
+#install.packages("ggrepel")
+# devtools::install_github("BioSenior/ggVolcano")
+# install.packages("openxlsx")
+#if (!requireNamespace("dplyr", quietly = TRUE)) {install.packages("dplyr")}
+library(ggrepel) 
+library(dplyr)
+library(openxlsx) 
+library(EnhancedVolcano)
+library(ggplot2)
+library(readxl)
+library(ggrepel)
+dataset <- read.xlsx("Meta_T-test_winJuv_SumJuv.xlsx")
+cut_off_LogP_value = 1.301   # 统计显著性
+cut_off_LogFC = 0.263            # 差异倍数值
+dataset$change = ifelse(
+  dataset$LogP_value > cut_off_LogP_value & abs(dataset$LogFC) >= cut_off_LogFC, 
+  ifelse(dataset$LogFC>cut_off_LogFC, 'Up', 'Down'),'Stable')
+head(dataset)
+# 筛选出需要标记的基因
+dataset$label <- ifelse(
+  dataset$LogP_value < cut_off_LogP_value & abs(dataset$LogFC) >= cut_off_LogFC, 
+  as.character(dataset$Metabolite), "")  # 使用Metabolite列作为标签
+
+# 火山图的基础设置
+p <- ggplot(
+  dataset, aes(x = LogFC, y = LogP_value, colour = change)) +  
+  geom_point(alpha = 0.7, size = 3) +  # 绘制点
+  scale_color_manual(values = c("#377EB8", "#d2dae2", "#E41A1C")) +  
+  # 添加辅助线
+  geom_vline(xintercept = c(-cut_off_LogFC, cut_off_LogFC), lty = 4, col = "black", lwd = 0.8) +  
+  geom_hline(yintercept = cut_off_LogP_value, lty = 4, col = "black", lwd = 0.8) +  
+  labs(x = "log2(fold change)",
+       y = "-log10 (p-value)",
+       title = "Differential Expressed Metabolites",
+       subtitle = "WinJu vs SumJu") +
+  theme_bw() +  
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),  
+    plot.subtitle = element_text(hjust = 0.5, size = 16),
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 17),
+    panel.grid.major = element_blank(),   # 移除主网格线
+    panel.grid.minor = element_blank(),   # 移除次网格线
+    plot.title.position = "panel", 
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 16),
+    legend.position = "right"      
+  )
+up_Metabolites_count <- dataset %>% filter(change == "Up") %>% nrow()
+down_Metabolites_count <- dataset %>% filter(change == "Down") %>% nrow()
+
+p <- p +geom_label_repel(data = subset(dataset, abs(LogFC) > 0.58), 
+                         aes(x = LogFC, y = LogP_value, label = Metabolite),
+                         size = 3, 
+                         box.padding = unit(0.5, "lines"),
+                         point.padding = unit(0.8, "lines"), 
+                         segment.color = "black", 
+                         show.legend = FALSE)+
+  annotate("text", x = max(dataset$LogFC)+2  , y = max(dataset$LogP_value) + 1, 
+           label = paste("n =", up_Metabolites_count), color = "#E41A1C", size = 7, hjust = 1) + 
+  annotate("text", x = -max(dataset$LogFC)-2  , y = max(dataset$LogP_value) + 1, 
+           label = paste("n =", down_Metabolites_count), color = "#377EB8",size = 7, hjust = 0) +
+  scale_x_continuous(limits = c(-6, 6))
+p
+ggsave("2Volcano_DEM_FC1.2_Shrinkage.pdf", plot = p, device = "pdf", width = 7, height = 7, dpi = 300)
+ggsave("2Volcano_DEM_FC1.2_Shrinkage.png", plot = p, device = "png", width =7, height = 7, dpi = 300)
+
+
+# 筛选
+up_Metabolites <- dataset %>% filter(change == "Up")
+down_Metabolites <- dataset %>% filter(change == "Down")
+stable_Metabolites <- dataset %>% filter(change == "Stable")
+#保存文件
+write.xlsx(up_Metabolites, "D:/OneDrive - Aalborg Universitet/Yuanyuan Zeng_AAU/Shrew project/Results/1.30 (Shrinkage)/DE/DEP_Brain/Up_DEP_Brain_WinJuv_SumJuv.xlsx")
+write.xlsx(down_Metabolites, "D:/OneDrive - Aalborg Universitet/Yuanyuan Zeng_AAU/Shrew project/Results/1.30 (Shrinkage)/DE/DEP_Brain/Down_DEP_Brain_WinJuv_SumJuv.xlsx")
+write.xlsx(stable_Metabolites, "D:/OneDrive - Aalborg Universitet/Yuanyuan Zeng_AAU/Shrew project/Results/1.30 (Shrinkage)/DE/DEP_Brain/Stable_DEP_Brain_WinJuv_SumJuv.xlsx")
+

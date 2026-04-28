@@ -1,0 +1,60 @@
+
+library(ggrepel) 
+library(dplyr)
+library(openxlsx) 
+library(EnhancedVolcano)
+library(ggplot2)
+library(readxl)
+library(ggrepel)
+dataset <- read.xlsx("Brain_T-test_SumAd_winJuv.xlsx")
+cut_off_LogP_value = 1.301   
+cut_off_LogFC = 0.263            
+dataset$change = ifelse(
+  dataset$LogP_value > cut_off_LogP_value & abs(dataset$LogFC) >= cut_off_LogFC, 
+  ifelse(dataset$LogFC>cut_off_LogFC, 'Up', 'Down'),'Stable')
+head(dataset)
+
+dataset$label <- ifelse(
+  dataset$LogP_value < cut_off_LogP_value & abs(dataset$LogFC) >= cut_off_LogFC, 
+  as.character(dataset$GeneSymbol), "")  # 使用GeneSymbol列作为标签
+
+p <- ggplot(
+  dataset, aes(x = LogFC, y = LogP_value, colour = change)) +  
+  geom_point(alpha = 0.7, size = 3) +  # 绘制点
+  scale_color_manual(values = c("#436329", "#d2dae2", "#E18727")) +  
+
+  geom_vline(xintercept = c(-cut_off_LogFC, cut_off_LogFC), lty = 4, col = "black", lwd = 0.8) +  
+  geom_hline(yintercept = cut_off_LogP_value, lty = 4, col = "black", lwd = 0.8) +  
+  labs(x = "log2(fold change)",
+       y = "-log10 (p-value)",
+       title = "Regrown Brain",
+       subtitle = "SumAd vs WinJu") +
+  theme_bw() +  
+  theme(
+    plot.title = element_text(hjust = 0.5, size = 18, face = "bold"),  
+    plot.subtitle = element_text(hjust = 0.5, size = 16),
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 17),
+    panel.grid.major = element_blank(),   
+    panel.grid.minor = element_blank(),   
+    plot.title.position = "panel", 
+    legend.title = element_text(size = 16),
+    legend.text = element_text(size = 16),
+    legend.position = "right"      
+  )
+up_proteins_count <- dataset %>% filter(change == "Up") %>% nrow()
+down_proteins_count <- dataset %>% filter(change == "Down") %>% nrow()
+
+p <- p +geom_label_repel(data = subset(dataset, abs(LogFC) > 0.58), 
+                         aes(x = LogFC, y = LogP_value, label = GeneSymbol),
+                         size = 3, 
+                         box.padding = unit(0.5, "lines"),
+                         point.padding = unit(0.8, "lines"), 
+                         segment.color = "black", 
+                         show.legend = FALSE)+
+  annotate("text", x = max(dataset$LogFC)+2  , y = max(dataset$LogP_value) + 1, 
+           label = paste("n =", up_proteins_count), color = "#E18727", size = 7, hjust = 1) + 
+  annotate("text", x = -max(dataset$LogFC)-2  , y = max(dataset$LogP_value) + 1, 
+           label = paste("n =", down_proteins_count), color = "#436329",size = 7, hjust = 0) +
+  scale_x_continuous(limits = c(-6, 6))
+p 

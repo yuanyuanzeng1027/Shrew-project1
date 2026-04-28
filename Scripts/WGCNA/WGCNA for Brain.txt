@@ -1,0 +1,178 @@
+library(WGCNA)
+library(pheatmap)
+library(dplyr)
+protein_data<- read.csv("Brain_Hub_DEP_allShrinkage.csv", header = TRUE, row.names = 1)
+metabolite_data <- read.csv("Meta_allShrinkage_Normalized.csv", header = TRUE, row.names = 1)
+gsg <- goodSamplesGenes(metabolite_data, verbose = 3)
+gsg$allOK
+sampleTree <- hclust(dist(metabolite_data), method = "average")
+plot(sampleTree, main = "Brain_Sample clustering to detect outliers", sub = "", xlab = "")
+clust <- cutreeStatic(sampleTree, cutHeight = 80, minSize = 1)
+table(clust)
+keepSamples <- clust == 1
+datExpr <- metabolite_data[keepSamples, ]
+
+nmetabolites = ncol(datExpr)
+nmetabolites
+nSamples = nrow(datExpr)
+nSamples
+dim(datExpr)
+datExpr <- datExpr %>% filter(rownames(datExpr) %in% rownames(protein_data))
+nSamples = nrow(datExpr)
+nSamples
+dim(datExpr)
+sampleTree_final <- hclust(dist(datExpr), method = "average")
+traitColors <- numbers2colors(protein_data, signed = FALSE)
+
+
+plotDendroAndColors(sampleTree_final, traitColors,
+                    groupLabels = names(protein_data),
+                    main = "Sample dendrogram and trait heatmap")
+
+powers <- c(c(1:10), seq(from = 12,to = 20, by = 2))
+
+
+sft <- pickSoftThreshold(datExpr, powerVector = powers, verbose = 5, blockSize = ncol(datExpr))
+sft$powerEstimate
+
+
+plot(sft$fitIndices[, 1], -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     xlab = "Soft Threshold (power)", ylab = "Scale Free Topology Model Fit, signed R^2", type = "n",
+     main = paste("Scale independence-Brain"))
+text(sft$fitIndices[, 1], -sign(sft$fitIndices[, 3]) * sft$fitIndices[, 2],
+     labels = powers, cex = 1, col = "red")
+
+abline(h = 0.85, col = "red")
+dev.off()
+
+plot(sft$fitIndices[, 1], sft$fitIndices[, 5],
+     xlab = "Soft Threshold (power)", ylab = "Mean Connectivity", type = "n",
+     main = paste("Mean connectivity"))
+text(sft$fitIndices[, 1], sft$fitIndices[, 5], labels = powers, cex = 1, col = "red")
+dev.off()
+net <- blockwiseModules(datExpr, power = 16,
+                        maxBlockSize = nmetabolites, TOMType = "unsigned",
+                        minModuleSize = 1, reassignThreshold = 0, mergeCutHeight = 0.25, 
+                        numericLabels = TRUE, pamRespectsDendro = FALSE, 
+                        saveTOMs = F, verbose = 3)
+
+table(net$colors) 
+moduleColors <- labels2colors(net$colors)
+table(moduleColors)
+length(net$dendrograms[[1]]$order)
+length(moduleColors[net$blocknmetabolites[[1]]])
+
+
+
+plotDendroAndColors(net$dendrograms[[1]], moduleColors[net$blockGenes[[1]]],
+                    "Module colors",
+                    dendroLabels = FALSE, hang = 0.05,  
+                    addGuide = TRUE, guideHang = 0.1)
+
+moduleLables <- net$colors
+
+moduleColors <- labels2colors(net$colors)
+MEs <- net$MEs
+head(MEs)
+geneTree <- net$dendrograms[[1]]
+
+
+MEList <-  moduleEigengenes(datExpr, colors = moduleColors)
+MEs0 <- MEList$eigengenes
+MEs <- orderMEs(MEs0)
+MEs <- orderMEs(MEs0)
+
+moduleTraitCor <- cor(MEs, protein_data , use = "p");
+head(moduleTraitCor)
+
+moduleTraitPvalue <- corPvalueStudent(moduleTraitCor, nSamples)
+head(moduleTraitPvalue)
+
+
+textMatrix <- paste(signif(moduleTraitCor, 2), "\n(", signif(moduleTraitPvalue, 1), ")", sep = "");
+dim(textMatrix) <- dim(moduleTraitCor)
+
+
+textMatrix_combined <- paste(signif(moduleTraitCor, 2), "\n", 
+                             ifelse(moduleTraitPvalue < 0.001, "***",
+                                    ifelse(moduleTraitPvalue < 0.01, "**",
+                                           ifelse(moduleTraitPvalue < 0.05, "*", ""))), 
+                             sep = "")
+dim(textMatrix_combined) <- dim(moduleTraitCor)
+
+
+library(RColorBrewer)
+custom_colors <- colorRampPalette(c("#377EB8", "white", "#E41A1C"))(50)
+
+
+
+par(mar = c(6, 12, 3, 3)) 
+
+labeledHeatmap(
+  Matrix = moduleTraitCor,
+  xLabels = colnames(protein_data),
+  yLabels = names(MEs),
+  ySymbols = names(MEs),
+  colorLabels = FALSE,
+  colors = custom_colors,
+  textMatrix = textMatrix_combined, 
+  setStdMargins = FALSE,
+  cex.text = 1,   
+  cex.lab.x = 1,   
+  cex.lab.y = 1,   
+  zlim = c(-1, 1),
+  main = "Metabolites Module - Brain HubDEPs Relationships"
+)
+
+
+mtext("Significance: *p < 0.05, **p < 0.01, ***p < 0.001", 
+      side = 1, line = 4, adj = 1, cex = 0.8, font = 3)
+
+dev.off()
+
+modNames <- substring(names(MEs), 3)
+modNames
+
+geneModuleMembership <- as.data.frame(cor(datExpr, MEs, use = "p"))
+MMPvalue <- as.data.frame(corPvalueStudent(as.matrix(geneModuleMembership), nSamples))
+names(geneModuleMembership) <- paste("MM", modNames, sep = "")
+names(MMPvalue) <- paste("p.MM", modNames, sep = "");
+geneModuleMembership[1:5, 1:5]
+
+geneTraitSignificance <- as.data.frame(cor(datExpr, protein_data, use = "p"))
+GSPvalue <- as.data.frame(corPvalueStudent(as.matrix(geneTraitSignificance), nSamples))
+names(geneTraitSignificance) <- paste("GS.", names(protein_data), sep = "")
+names(GSPvalue) <- paste("p.GS.", names(protein_data), sep = "")
+head(geneTraitSignificance)
+
+module = "pink"
+pheno = "Ndufc2"
+modNames = substring(names(MEs), 3)
+
+module_column = match(module, modNames)
+pheno_column = match(pheno, colnames(protein_data))
+
+moduleGenes <- moduleColors == module
+
+pink_hub <- moduleGenes
+GenesNames <- colnames(datExpr)
+
+
+pink_hub_genes<- GenesNames[pink_hub]
+
+
+print(pink_hub_genes)
+
+
+par(xpd = TRUE, mar = c(5, 4, 4, 4)) 
+verboseScatterplot(abs(geneModuleMembership[moduleGenes, module_column]),
+                   abs(geneTraitSignificance[moduleGenes, 1]),
+                   xlab = paste("Module Membership in ", module, "module"),
+                   ylab = paste("Metabolite significance for ", pheno),
+                   main = paste("Module membership vs. metabolite significance\n (Brain)"),
+                   cex.main = 1.2, cex.lab = 1.2, cex.axis = 1.2, col = module)
+
+text(abs(geneModuleMembership[moduleGenes, module_column]),
+     abs(geneTraitSignificance[moduleGenes, 1]), labels = pink_hub_genes, pos = 2, cex = 0.7, col = "black")
+dev.off()
+

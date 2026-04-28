@@ -1,0 +1,38 @@
+library(dplyr)
+library(tibble)
+library(ggplot2)
+library(massdatabase)
+library(clusterProfiler)
+library(tidyr)
+
+com_ano <- result2 %>% select(KEGG.ID,pathway_id,pathway_name)
+gene_select_df <- read.table("DEM_KEGGid_Regrowth.txt", header = TRUE, sep = "\t")
+gene_select <- gene_select_df$keggid
+kegg_rich <- enricher(gene = gene_select,                      
+                      TERM2GENE = com_ano[c('pathway_id', 'KEGG.ID')],                       
+                      TERM2NAME = com_ano[c('pathway_id', 'pathway_name')],                      
+                      pvalueCutoff = 1,                       
+                      pAdjustMethod = 'BH',                       
+                      qvalueCutoff = 1,                      
+                      maxGSSize = 500)
+dotplot(kegg_rich)  
+library(enrichplot)
+p_cnet <- cnetplot(kegg_rich, 
+                   showCategory = 5,    
+                   layout = "kk",       
+                   circular = FALSE)     
+P1 <- p_cnet + ggtitle("KEGG_Metabolites_Netplot_Regrowth")
+P1
+
+
+heatplot(kegg_rich)
+library(enrichplot)
+kegg_rich <- pairwise_termsim(kegg_rich)
+P2 <- emapplot(
+  kegg_rich, 
+  color = "p.adjust",   
+  layout = "kk", 
+  showCategory = 10,     
+  repel = TRUE,         
+  label_format = 30  )  
+P2
